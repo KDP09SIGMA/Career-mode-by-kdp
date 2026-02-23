@@ -129,6 +129,7 @@
       <button id="goDevelopment">Development</button>
       <button id="goTransfers">Transfers</button>
       <button id="goAwards">Awards & Legacy</button>
+      <button id="goMail">Mail</button>
       <button id="simSeasonBtn" class="warn">Simulate Full Season</button>
     </div>
 
@@ -236,6 +237,12 @@
       <h3>Awards, Records & Hall of Fame</h3>
       <div id="awardsBody" class="list" style="max-height:460px;"></div>
       <div class="row" style="margin-top:10px;"><button id="closeAwards" class="primary">Back</button></div>
+    </div>
+
+    <div id="mailScreen" class="screen panel">
+      <h3>Inbox (Career Mail)</h3>
+      <div id="mailBody" class="list" style="max-height:460px;"></div>
+      <div class="row" style="margin-top:10px;"><button id="closeMail" class="primary">Back</button></div>
     </div>
   </div>
 
@@ -714,6 +721,7 @@ function buildRealBallonDorCandidates(player) {
       market:new TransferMarket(),
       transferRequest:null,
       lastSeasonSummary:null,
+      mailbox:[],
       init() {
         try {
           this.bindSetup();
@@ -791,11 +799,31 @@ function buildRealBallonDorCandidates(player) {
         this.render();
         this.save();
       },
+      createSeasonEndTransferMail(seasonTag) {
+        const clubs = Array.from({length:3},()=>choice(TEAM_NAMES[choice(LEAGUES)]));
+        const msg = {
+          id: Date.now() + Math.floor(Math.random()*999),
+          read:false,
+          title:`Season ${seasonTag} Transfer Interest Update`,
+          body:`Your agents report interest from ${clubs.join(', ')}. Estimated weekly salary range: €${Math.round(this.player.salary*1.1).toLocaleString()} - €${Math.round(this.player.salary*1.6).toLocaleString()}. Open Transfer Market to negotiate.`,
+          time:new Date().toLocaleString()
+        };
+        this.mailbox.unshift(msg);
+      },
+      renderMail() {
+        const b=document.getElementById('mailBody');
+        if (!this.mailbox.length) { b.innerHTML = '<div>No mail yet. End a season to receive transfer updates.</div>'; return; }
+        b.innerHTML = this.mailbox.map(m=>`<div style="padding:8px;border:1px solid #2f4d7d;border-radius:10px;margin-bottom:8px;background:${m.read?'#0e1830':'#15264a'};"><div style="font-weight:700;">${m.read?'':'📩 '}${m.title}</div><div class="subtle">${m.time}</div><div style="margin-top:4px;">${m.body}</div><div style="margin-top:6px;"><button data-read="${m.id}">Mark Read</button></div></div>`).join('');
+        b.querySelectorAll('[data-read]').forEach(btn=>btn.onclick=()=>{ const id=+btn.dataset.read; const m=this.mailbox.find(x=>x.id===id); if(m) m.read=true; this.renderMail(); this.save(); });
+      },
       bindButtons() {
         document.getElementById('playNextBtn').onclick = ()=>{
           if (!this.player || !this.season) return;
+          const prevYear = this.season.year;
           const {logs, playerMatch} = this.season.simulateWeek(this.player);
+          const seasonEnded = this.season.year !== prevYear;
           this.market.generateOffers(this.season, this.player);
+          if (seasonEnded) this.createSeasonEndTransferMail(`${prevYear}-${String(prevYear+1).slice(-2)}`);
           if (!this.transferRequest && Math.random()<0.12 && this.player.managerTrust < 60) {
             this.transferRequest = {club: choice(TEAM_NAMES[choice(LEAGUES)]), mood:'Wants a new challenge'};
           }
@@ -827,6 +855,8 @@ function buildRealBallonDorCandidates(player) {
         document.getElementById('goDevelopment').onclick=()=>{ if(!this.player)return; this.switchScreen('devScreen'); this.renderDev(); };
         document.getElementById('goTransfers').onclick=()=>{ if(!this.player)return; this.switchScreen('transferScreen'); this.renderTransfers(); };
         document.getElementById('goAwards').onclick=()=>{ if(!this.player)return; this.switchScreen('awardsScreen'); this.renderAwards(); };
+        document.getElementById('goMail').onclick=()=>{ if(!this.player)return; this.switchScreen('mailScreen'); this.renderMail(); };
+        document.getElementById('closeMail').onclick=()=>{ this.switchScreen('gameScreen'); this.render(); };
         document.getElementById('simSeasonBtn').onclick=()=>{ if(!this.player||!this.season)return; this.simulateEntireSeason(); };
       },
       simulateEntireSeason() {
@@ -835,7 +865,9 @@ function buildRealBallonDorCandidates(player) {
         const startAssists = this.player.stats.assists;
         let weeks = 0;
         while (this.season.calendar.week <= 38 && weeks < 60) {
+          const y=this.season.year;
           const {logs} = this.season.simulateWeek(this.player);
+          if (this.season.year !== y) this.createSeasonEndTransferMail(`${y}-${String(y+1).slice(-2)}`);
           this.market.generateOffers(this.season, this.player);
           weeks++;
           if (logs?.length && this.player.injury) break;
@@ -962,7 +994,8 @@ function buildRealBallonDorCandidates(player) {
           },
           offers:this.market.offers,
           transferRequest:this.transferRequest,
-          lastSeasonSummary:this.lastSeasonSummary
+          lastSeasonSummary:this.lastSeasonSummary,
+          mailbox:this.mailbox
         };
         localStorage.setItem(SAVE_KEY, JSON.stringify(data));
         document.getElementById('autosaveStatus').textContent = `Auto-saved ${new Date().toLocaleTimeString()}`;
@@ -979,6 +1012,7 @@ function buildRealBallonDorCandidates(player) {
           this.market.offers = data.offers || [];
           this.transferRequest = data.transferRequest || null;
           this.lastSeasonSummary = data.lastSeasonSummary || null;
+          this.mailbox = data.mailbox || [];
           this.switchScreen('gameScreen');
           this.render();
         } catch(e) { console.error(e); }
