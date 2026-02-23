@@ -97,7 +97,7 @@
     .negative { color: var(--danger); }
     .gold { color: var(--gold); }
 
-    .attr-grid { display:grid; grid-template-columns: 1fr auto auto; gap:8px; align-items:center; }
+    .attr-grid { display:grid; grid-template-columns: 1fr auto auto auto; gap:8px; align-items:center; }
     .bar { width: 100%; height:10px; border-radius:8px; background:#22345b; overflow:hidden; }
     .bar > i { display:block; height:100%; background: linear-gradient(90deg,#1dd8a4,#4cc9f0); }
 
@@ -129,6 +129,7 @@
       <button id="goDevelopment">Development</button>
       <button id="goTransfers">Transfers</button>
       <button id="goAwards">Awards & Legacy</button>
+      <button id="goMail">Mail</button>
       <button id="simSeasonBtn" class="warn">Simulate Full Season</button>
     </div>
 
@@ -174,8 +175,10 @@
             <h3>Actions</h3>
             <div class="section-title">Career Operations</div>
             <div class="col">
-              <button id="playNextBtn" class="primary">Play / Sim Next Matchday</button>
+              <button id="playNextBtn" class="primary">Play Matchday (Decisions)</button>
+              <button id="simNextBtn">Sim Matchday (Quick)</button>
               <button id="trainBtn">Weekly Training</button>
+              <button id="retireNowBtn" class="danger">Retire Now</button>
               <button id="devBtn">Open Development</button>
               <button id="transferBtn">Transfer Market</button>
               <button id="awardsBtn">Awards & Legacy</button>
@@ -222,8 +225,9 @@
         <div>OVR: <span class="big" id="devOvr">0</span></div>
         <div>Dev Points: <span class="big" id="devPts">0</span></div>
       </div>
+      <div class="subtle" id="devPlanInfo">Adjust sliders then apply upgrades.</div>
       <div id="attrList" class="col"></div>
-      <div class="row" style="margin-top:10px;"><button id="closeDev" class="primary">Back</button></div>
+      <div class="row" style="margin-top:10px;"><button id="applyDevPlan" class="primary">Apply Upgrades</button><button id="resetDevPlan">Reset Plan</button><button id="closeDev" class="primary">Back</button></div>
     </div>
 
     <div id="transferScreen" class="screen panel">
@@ -236,6 +240,20 @@
       <h3>Awards, Records & Hall of Fame</h3>
       <div id="awardsBody" class="list" style="max-height:460px;"></div>
       <div class="row" style="margin-top:10px;"><button id="closeAwards" class="primary">Back</button></div>
+    </div>
+
+    
+
+    <div id="retireScreen" class="screen panel">
+      <h3>Retirement Summary</h3>
+      <div id="retireBody" class="list" style="max-height:520px;"></div>
+      <div class="row" style="margin-top:10px;"><button id="closeRetire" class="primary">Back</button></div>
+    </div>
+
+    <div id="mailScreen" class="screen panel">
+      <h3>Inbox (Career Mail)</h3>
+      <div id="mailBody" class="list" style="max-height:460px;"></div>
+      <div class="row" style="margin-top:10px;"><button id="closeMail" class="primary">Back</button></div>
     </div>
   </div>
 
@@ -378,10 +396,14 @@ function buildRealBallonDorCandidates(player) {
         this.injury = data.injury || null;
         this.fatigue = data.fatigue ?? 0;
         this.devPoints = data.devPoints ?? 8;
-        this.stats = data.stats || {apps:0, goals:0, assists:0, avgRating:0, shots:0, cleanSheets:0, trophies:0, europeanGoals:0, hatTricks:0, streak:0, bestStreak:0};
+        this.stats = data.stats || {apps:0, goals:0, assists:0, avgRating:0, shots:0, cleanSheets:0, trophies:0, trophyList:[], europeanGoals:0, hatTricks:0, streak:0, bestStreak:0};
         this.season = data.season || {goals:0, assists:0, ratings:[], shots:0, cleanSheets:0, mins:0};
         this.careerAwards = data.careerAwards || {ballonDor:0, goldenBoots:0, goldenGloves:0, euroPlayer:0};
         this.attributes = data.attributes || Player.defaultAttributes(this.position);
+        this.clubHistory = data.clubHistory || [this.club];
+        this.forcedRetireAge = data.forcedRetireAge || rand(36,40);
+        this.retired = data.retired || false;
+        this.retireReport = data.retireReport || null;
         this.overall = data.overall || this.calculateOverall();
       }
       static defaultAttributes(pos) {
@@ -612,12 +634,55 @@ function buildRealBallonDorCandidates(player) {
         this.leagues = (data.leagues||LEAGUES).map(l=>new League(l, TEAM_NAMES[l]));
         this.calendar = data.calendar || {week:1, month:8, phase:'Pre-season'};
         this.playerCompetition = data.playerCompetition || 'League';
-        this.records = data.records || {ballonDorHistory:[], hallOfFame:[], europeanWinners:[], allTimeLeagueTopScorer:{}, allTimeEuropeanTopScorer:{ucl:null,uel:null,uecl:null}};
+        this.records = data.records || {ballonDorHistory:[], hallOfFame:[], europeanWinners:[], allTimeLeagueTopScorer:{}, allTimeEuropeanTopScorer:{ucl:null,uel:null,uecl:null}, europeanGoldenBoot:null, mostTrophies:null};
         this.awards = data.awards || {yearly:[]};
       }
       getLeagueByClub(club) { return this.leagues.find(l=>l.clubs.some(c=>c.name===club)); }
       weekFixtures(league) { return league.schedule[this.calendar.week-1] || []; }
-      simulateWeek(player) {
+      getEuropeanQualification() {
+        const slots = {ucl:[], uel:[], uecl:[]};
+        this.leagues.forEach(l=>{
+          const t = l.table();
+          const cupWinner = choice(t.slice(0,10));
+          const top4 = t.slice(0,4).map(c=>c.name);
+          top4.forEach(c=>slots.ucl.push({club:c, league:l.name}));
+          if (t[4]) slots.uel.push({club:t[4].name, league:l.name});
+          if (cupWinner && !top4.includes(cupWinner.name) && cupWinner.name!==t[4]?.name) slots.uel.push({club:cupWinner.name, league:l.name});
+          if (t[5]) slots.uecl.push({club:t[5].name, league:l.name});
+          if (t[6]) slots.uecl.push({club:t[6].name, league:l.name});
+        });
+        return slots;
+      }
+      simulateEuropeanCompetitions(player, slots) {
+        const pickScorer = () => choice(REAL_PLAYERS.filter(p=>!p.legend));
+        const mk = (name, teams) => ({
+          name,
+          teams,
+          winner: choice(teams).club,
+          topScorer: pickScorer(),
+          topScorerGoals: rand(8,18),
+          goldenGlove: choice(REAL_PLAYERS.filter(p=>p.position==='GK' && !p.legend)).name,
+          goldenGloveCS: rand(4,10)
+        });
+        const ucl = mk('UCL', slots.ucl.length?slots.ucl:slots.uel.slice(0,8));
+        const uel = mk('UEL', slots.uel.length?slots.uel:slots.uecl.slice(0,8));
+        const uecl = mk('UECL', slots.uecl.length?slots.uecl:slots.ucl.slice(0,8));
+        const superCupWinner = choice([ucl.winner, uel.winner]);
+        const playerComp = [ucl,uel,uecl].find(c=>c.teams.some(t=>t.club===player.club));
+        return {ucl,uel,uecl, superCupWinner, playerComp: playerComp?.name || 'None'};
+      }
+      updateAllTimeRecords(player) {
+        if (!this.records.europeanGoldenBoot || player.stats.goals > this.records.europeanGoldenBoot.goals) {
+          this.records.europeanGoldenBoot = {name: player.name, goals: player.stats.goals};
+        }
+        if (!this.records.mostTrophies || player.stats.trophies > this.records.mostTrophies.trophies) {
+          this.records.mostTrophies = {name: player.name, trophies: player.stats.trophies};
+        }
+        if (!this.records.allTimeLeagueTopScorer[player.club] || player.stats.goals > this.records.allTimeLeagueTopScorer[player.club].goals) {
+          this.records.allTimeLeagueTopScorer[player.club] = {name:player.name, goals:player.stats.goals};
+        }
+      }
+      simulateWeek(player, detailed=true) {
         const logs = [];
         this.playerCompetition = this.calendar.week%9===0 ? 'Domestic Cup' : 'League';
         if (this.calendar.week%12===0) this.playerCompetition = 'UCL Group';
@@ -631,7 +696,7 @@ function buildRealBallonDorCandidates(player) {
             const h = l.clubByName(f.home), a = l.clubByName(f.away);
             const important = ['Arsenal','Liverpool','Man City','Man United','Real Madrid','Barcelona','Inter','Milan','Juventus','Bayern','Dortmund','PSG'].includes(h.name)
               && ['Arsenal','Liverpool','Man City','Man United','Real Madrid','Barcelona','Inter','Milan','Juventus','Bayern','Dortmund','PSG'].includes(a.name);
-            const result = MatchEngine.simulateMatch(h,a,player.club,player,this.playerCompetition,important);
+            const result = detailed ? MatchEngine.simulateMatch(h,a,player.club,player,this.playerCompetition,important) : MatchEngine.simulateMatch(h,a,player.club,{...player, injury:true},this.playerCompetition,important);
             h.record(result.hg,result.ag); a.record(result.ag,result.hg);
             if (result.home===player.club || result.away===player.club) playerMatch = result;
           });
@@ -643,7 +708,7 @@ function buildRealBallonDorCandidates(player) {
           player.devPoints += Math.max(0, Math.floor((playerMatch.rating-6)*2));
           if (playerMatch.rating >= 9) player.devPoints += 2;
           if (playerMatch.pGoals >= 3) { player.morale = clamp(player.morale+6,0,100); player.mediaRep = clamp(player.mediaRep+6,0,100); }
-          logs.push(...playerMatch.commentary);
+          if (detailed) logs.push(...playerMatch.commentary); else logs.push("Quick simulation completed.");
         } else {
           logs.push('No player match this week. Light recovery training completed.');
           player.fatigue = clamp(player.fatigue - 10,0,100);
@@ -665,13 +730,16 @@ function buildRealBallonDorCandidates(player) {
         const table = playerLeague.table();
         const pos = table.findIndex(c=>c.name===player.club)+1;
         const qualified = pos<=4 ? 'UCL' : pos===5 ? 'UEL' : (pos===6||pos===7) ? 'UECL' : 'None';
+        const slots = this.getEuropeanQualification();
+        const euro = this.simulateEuropeanCompetitions(player, slots);
         const trophiesWon = [];
-        if (pos===1) { trophiesWon.push(`${playerLeague.name} Title`); player.stats.trophies++; }
-        if (Math.random() < .14) { trophiesWon.push('Domestic Cup'); player.stats.trophies++; }
-        if (Math.random() < .07 && qualified==='UCL') { trophiesWon.push('Champions League'); player.stats.trophies++; }
-        if (Math.random() < .06 && qualified==='UEL') { trophiesWon.push('Europa League'); player.stats.trophies++; }
-        if (Math.random() < .06 && qualified==='UECL') { trophiesWon.push('Conference League'); player.stats.trophies++; }
-        if (Math.random() < .04) { trophiesWon.push('UEFA Super Cup'); player.stats.trophies++; player.managerTrust = clamp(player.managerTrust+4,0,100); player.mediaRep = clamp(player.mediaRep+5,0,100); }
+        const seasonTag = `${this.year}-${String(this.year+1).slice(-2)}`;
+        if (pos===1) { trophiesWon.push(`${playerLeague.name} Title`); player.stats.trophies++; player.stats.trophyList.push(`${seasonTag} ${playerLeague.name} Title`); }
+        if (Math.random() < .18) { trophiesWon.push('Domestic Cup'); player.stats.trophies++; player.stats.trophyList.push(`${seasonTag} Domestic Cup`); }
+        if (euro.ucl.winner===player.club) { trophiesWon.push('Champions League'); player.stats.trophies++; player.stats.trophyList.push(`${seasonTag} Champions League`); }
+        if (euro.uel.winner===player.club) { trophiesWon.push('Europa League'); player.stats.trophies++; player.stats.trophyList.push(`${seasonTag} Europa League`); }
+        if (euro.uecl.winner===player.club) { trophiesWon.push('Conference League'); player.stats.trophies++; player.stats.trophyList.push(`${seasonTag} Conference League`); }
+        if (euro.superCupWinner===player.club) { trophiesWon.push('UEFA Super Cup'); player.stats.trophies++; player.stats.trophyList.push(`${seasonTag} UEFA Super Cup`); player.managerTrust = clamp(player.managerTrust+4,0,100); player.mediaRep = clamp(player.mediaRep+5,0,100); }
 
         const avg = player.season.ratings.length ? player.season.ratings.reduce((a,b)=>a+b,0)/player.season.ratings.length : 6;
         const ballonScore = player.season.goals*2.1 + player.season.assists*1.4 + avg*8 + trophiesWon.length*15 + player.mediaRep*.2 + player.stats.europeanGoals*1.2;
@@ -693,11 +761,20 @@ function buildRealBallonDorCandidates(player) {
           ballonTop10: top10,
           winner,
           europeanGoldenBoot: player.season.goals + Math.floor(player.stats.europeanGoals*.3),
-          uclTopScorer: `${choice(REAL_PLAYERS).name} (${rand(8,21)} goals)`,
-          uelTopScorer: `${choice(REAL_PLAYERS).name} (${rand(7,17)} goals)`,
-          ueclTopScorer: `${choice(REAL_PLAYERS).name} (${rand(6,15)} goals)`
+          uclTopScorer: `${euro.ucl.topScorer.name} (${euro.ucl.topScorerGoals} goals)`,
+          uelTopScorer: `${euro.uel.topScorer.name} (${euro.uel.topScorerGoals} goals)`,
+          ueclTopScorer: `${euro.uecl.topScorer.name} (${euro.uecl.topScorerGoals} goals)`,
+          uclGoldenGlove: `${euro.ucl.goldenGlove} (${euro.ucl.goldenGloveCS} clean sheets)`,
+          uelGoldenGlove: `${euro.uel.goldenGlove} (${euro.uel.goldenGloveCS} clean sheets)`,
+          ueclGoldenGlove: `${euro.uecl.goldenGlove} (${euro.uecl.goldenGloveCS} clean sheets)`,
+          superCupWinner: euro.superCupWinner,
+          uclWinner: euro.ucl.winner,
+          uelWinner: euro.uel.winner,
+          ueclWinner: euro.uecl.winner
         });
 
+        this.records.europeanWinners.push({season:seasonTag, ucl:euro.ucl.winner, uel:euro.uel.winner, uecl:euro.uecl.winner, superCup:euro.superCupWinner});
+        this.updateAllTimeRecords(player);
         player.age++;
         player.applyAgeCurve();
         player.season = {goals:0, assists:0, ratings:[], shots:0, cleanSheets:0, mins:0};
@@ -714,6 +791,8 @@ function buildRealBallonDorCandidates(player) {
       market:new TransferMarket(),
       transferRequest:null,
       lastSeasonSummary:null,
+      mailbox:[],
+      devPlan:{},
       init() {
         try {
           this.bindSetup();
@@ -791,15 +870,96 @@ function buildRealBallonDorCandidates(player) {
         this.render();
         this.save();
       },
+
+      checkForcedRetirement() {
+        if (this.player && !this.player.retired && this.player.age >= this.player.forcedRetireAge) {
+          this.retirePlayer(`Forced retirement triggered at age ${this.player.age}.`);
+        }
+      },
+      retirePlayer(reason='Retired by player choice.') {
+        const p=this.player;
+        if (!p || p.retired) return;
+        const records=[];
+        if (p.stats.goals>800) records.push('800+ Career Goals');
+        if (p.stats.assists>250) records.push('250+ Career Assists');
+        if (p.stats.apps>900) records.push('900+ Career Appearances');
+        if (p.careerAwards.ballonDor>=3) records.push("Multiple Ballon d'Or wins");
+        if (p.stats.bestStreak>=10) records.push('10+ Match Scoring Streak');
+        p.retired=true;
+        p.retireReport={
+          reason,
+          age:p.age,
+          name:p.name,
+          trophies:p.stats.trophies,
+          trophyList:p.stats.trophyList,
+          awards:{...p.careerAwards},
+          teams:[...new Set(p.clubHistory)],
+          stats:{apps:p.stats.apps, goals:p.stats.goals, assists:p.stats.assists},
+          recordsBroken:records,
+          legacy:p.legacyScore(),
+          goatTier:p.goatTier()
+        };
+        this.season.records.hallOfFame.unshift({name:p.name, legacy:p.legacyScore(), trophies:p.stats.trophies, goals:p.stats.goals, assists:p.stats.assists, awards:{...p.careerAwards}});
+        this.renderRetirement();
+        this.switchScreen('retireScreen');
+        this.save();
+      },
+      renderRetirement() {
+        const r=this.player?.retireReport;
+        const b=document.getElementById('retireBody');
+        if (!r) { b.innerHTML='<div>No retirement data.</div>'; return; }
+        b.innerHTML=`<h4>${r.name} Retirement</h4>
+          <p><b>Reason:</b> ${r.reason}</p>
+          <p><b>Age:</b> ${r.age} • <b>Legacy:</b> ${r.legacy} (${r.goatTier})</p>
+          <p><b>Career Stats:</b> Apps ${r.stats.apps}, Goals ${r.stats.goals}, Assists ${r.stats.assists}</p>
+          <p><b>Total Trophies:</b> ${r.trophies}</p>
+          <p><b>Trophy List:</b> ${r.trophyList.length? r.trophyList.join(', ') : 'None'}</p>
+          <p><b>Awards:</b> Ballon d'Or ${r.awards.ballonDor}, Golden Boots ${r.awards.goldenBoots}, Golden Gloves ${r.awards.goldenGloves}</p>
+          <p><b>Teams Played For:</b> ${r.teams.join(', ')}</p>
+          <p><b>World Records Broken:</b> ${r.recordsBroken.length? r.recordsBroken.join(', ') : 'No major thresholds broken'}</p>`;
+      },
+      createSeasonEndTransferMail(seasonTag) {
+        const clubs = Array.from({length:3},()=>choice(TEAM_NAMES[choice(LEAGUES)]));
+        const msg = {
+          id: Date.now() + Math.floor(Math.random()*999),
+          read:false,
+          title:`Season ${seasonTag} Transfer Interest Update`,
+          body:`Your agents report interest from ${clubs.join(', ')}. Estimated weekly salary range: €${Math.round(this.player.salary*1.1).toLocaleString()} - €${Math.round(this.player.salary*1.6).toLocaleString()}. Open Transfer Market to negotiate.`,
+          time:new Date().toLocaleString()
+        };
+        this.mailbox.unshift(msg);
+      },
+      renderMail() {
+        const b=document.getElementById('mailBody');
+        if (!this.mailbox.length) { b.innerHTML = '<div>No mail yet. End a season to receive transfer updates.</div>'; return; }
+        b.innerHTML = this.mailbox.map(m=>`<div style="padding:8px;border:1px solid #2f4d7d;border-radius:10px;margin-bottom:8px;background:${m.read?'#0e1830':'#15264a'};"><div style="font-weight:700;">${m.read?'':'📩 '}${m.title}</div><div class="subtle">${m.time}</div><div style="margin-top:4px;">${m.body}</div><div style="margin-top:6px;"><button data-read="${m.id}">Mark Read</button></div></div>`).join('');
+        b.querySelectorAll('[data-read]').forEach(btn=>btn.onclick=()=>{ const id=+btn.dataset.read; const m=this.mailbox.find(x=>x.id===id); if(m) m.read=true; this.renderMail(); this.save(); });
+      },
       bindButtons() {
         document.getElementById('playNextBtn').onclick = ()=>{
           if (!this.player || !this.season) return;
-          const {logs, playerMatch} = this.season.simulateWeek(this.player);
+          const prevYear = this.season.year;
+          const {logs, playerMatch} = this.season.simulateWeek(this.player, true);
+          const seasonEnded = this.season.year !== prevYear;
           this.market.generateOffers(this.season, this.player);
+          if (seasonEnded) this.createSeasonEndTransferMail(`${prevYear}-${String(prevYear+1).slice(-2)}`);
           if (!this.transferRequest && Math.random()<0.12 && this.player.managerTrust < 60) {
             this.transferRequest = {club: choice(TEAM_NAMES[choice(LEAGUES)]), mood:'Wants a new challenge'};
           }
           this.renderMatch(logs, playerMatch);
+          this.checkForcedRetirement();
+          this.render();
+          this.save();
+        };
+        document.getElementById('simNextBtn').onclick = ()=>{
+          if (!this.player || !this.season || this.player.retired) return;
+          const prevYear = this.season.year;
+          const {logs, playerMatch} = this.season.simulateWeek(this.player, false);
+          const seasonEnded = this.season.year !== prevYear;
+          this.market.generateOffers(this.season, this.player);
+          if (seasonEnded) this.createSeasonEndTransferMail(`${prevYear}-${String(prevYear+1).slice(-2)}`);
+          this.renderMatch(logs, playerMatch);
+          this.checkForcedRetirement();
           this.render();
           this.save();
         };
@@ -827,7 +987,11 @@ function buildRealBallonDorCandidates(player) {
         document.getElementById('goDevelopment').onclick=()=>{ if(!this.player)return; this.switchScreen('devScreen'); this.renderDev(); };
         document.getElementById('goTransfers').onclick=()=>{ if(!this.player)return; this.switchScreen('transferScreen'); this.renderTransfers(); };
         document.getElementById('goAwards').onclick=()=>{ if(!this.player)return; this.switchScreen('awardsScreen'); this.renderAwards(); };
-        document.getElementById('simSeasonBtn').onclick=()=>{ if(!this.player||!this.season)return; this.simulateEntireSeason(); };
+        document.getElementById('goMail').onclick=()=>{ if(!this.player)return; this.switchScreen('mailScreen'); this.renderMail(); };
+        document.getElementById('closeMail').onclick=()=>{ this.switchScreen('gameScreen'); this.render(); };
+        document.getElementById('simSeasonBtn').onclick=()=>{ if(!this.player||!this.season||this.player.retired)return; this.simulateEntireSeason(); };
+        document.getElementById('retireNowBtn').onclick=()=>{ if(!this.player)return; this.retirePlayer('Player chose to retire.'); };
+        document.getElementById('closeRetire').onclick=()=>{ this.switchScreen('gameScreen'); this.render(); };
       },
       simulateEntireSeason() {
         const startSeason = `${this.season.year}-${String(this.season.year+1).slice(-2)}`;
@@ -835,7 +999,9 @@ function buildRealBallonDorCandidates(player) {
         const startAssists = this.player.stats.assists;
         let weeks = 0;
         while (this.season.calendar.week <= 38 && weeks < 60) {
+          const y=this.season.year;
           const {logs} = this.season.simulateWeek(this.player);
+          if (this.season.year !== y) this.createSeasonEndTransferMail(`${y}-${String(y+1).slice(-2)}`);
           this.market.generateOffers(this.season, this.player);
           weeks++;
           if (logs?.length && this.player.injury) break;
@@ -844,6 +1010,7 @@ function buildRealBallonDorCandidates(player) {
         const endAssists = this.player.stats.assists;
         this.lastSeasonSummary = `Season ${startSeason} simulated in one flow. +${endGoals-startGoals} goals, +${endAssists-startAssists} assists, Apps: ${this.player.stats.apps}, Trust: ${this.player.managerTrust}, Morale: ${this.player.morale}.`;
         this.renderMatch([`Full season simulation complete for ${startSeason}.`], null);
+        this.checkForcedRetirement();
         this.render();
         this.save();
       },
@@ -872,7 +1039,7 @@ function buildRealBallonDorCandidates(player) {
         document.getElementById('trustPill').textContent = `Trust ${this.player.managerTrust}`;
         document.getElementById('mediaPill').textContent = `Media ${this.player.mediaRep}`;
         document.getElementById('moralePill').textContent = `Morale ${this.player.morale}`;
-        document.getElementById('injuryPill').textContent = this.player.injury ? `${this.player.injury.type} (${this.player.injury.weeks}w)` : 'Fit';
+        document.getElementById('injuryPill').textContent = this.player.retired ? 'Retired' : (this.player.injury ? `${this.player.injury.type} (${this.player.injury.weeks}w)` : 'Fit');
 
         const league = this.season.getLeagueByClub(this.player.club) || this.season.leagues[0];
         document.getElementById('calendarInfo').textContent = `Current Competition: ${this.season.playerCompetition} • Transfer windows: Jan & Jul • Intl break light simulation included`;
@@ -894,10 +1061,26 @@ function buildRealBallonDorCandidates(player) {
         const attrs = this.player.position==='GK' ? ['diving','handling','reflexes','positioning','kicking','physical'] : ['pace','shooting','passing','dribbling','defending','physical'];
         document.getElementById('attrList').innerHTML = attrs.map(k=>{
           const v = this.player.attributes[k];
-          const cost = this.player.attrCost(v);
-          return `<div class="attr-grid"><div><div style="text-transform:capitalize;">${k}</div><div class="bar"><i style="width:${v}%;"></i></div></div><div>${v}</div><button data-attr="${k}">+1 (${cost})</button></div>`;
+          const planned = this.devPlan[k] || 0;
+          return `<div class="attr-grid"><div><div style="text-transform:capitalize;">${k}</div><div class="bar"><i style="width:${v}%;"></i></div></div><div>${v}</div><input type="range" min="0" max="10" value="${planned}" data-slider="${k}"><div>+${planned}</div></div>`;
         }).join('');
-        document.querySelectorAll('[data-attr]').forEach(b=>b.onclick=()=>{ this.player.improveAttribute(b.dataset.attr); this.renderDev(); this.save(); });
+        const recalc=()=>{
+          let total=0;
+          Object.entries(this.devPlan).forEach(([k,n])=>{
+            let val=this.player.attributes[k]||0;
+            for(let i=0;i<n;i++){ total+=this.player.attrCost(val); val++; }
+          });
+          document.getElementById('devPlanInfo').textContent = `Planned cost: ${total} • Available: ${this.player.devPoints}`;
+        };
+        document.querySelectorAll('[data-slider]').forEach(sl=>sl.oninput=()=>{ this.devPlan[sl.dataset.slider]=+sl.value; this.renderDev(); });
+        document.getElementById('applyDevPlan').onclick=()=>{
+          Object.entries(this.devPlan).forEach(([k,n])=>{ for(let i=0;i<n;i++) this.player.improveAttribute(k); });
+          this.devPlan={};
+          this.renderDev();
+          this.save();
+        };
+        document.getElementById('resetDevPlan').onclick=()=>{ this.devPlan={}; this.renderDev(); };
+        recalc();
       },
       renderTransfers() {
         const t = document.getElementById('transferList');
@@ -913,7 +1096,7 @@ function buildRealBallonDorCandidates(player) {
         if (denyBtn) denyBtn.onclick=()=>{ this.player.morale = clamp(this.player.morale-8,0,100); this.player.managerTrust=clamp(this.player.managerTrust-5,0,100); this.transferRequest=null; this.renderTransfers(); this.save(); };
         t.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{
           const o = this.market.offers[+b.dataset.a];
-          this.player.club=o.club; this.player.salary=o.salary; this.player.contractYears=o.years; this.player.managerTrust=60;
+          this.player.club=o.club; this.player.salary=o.salary; this.player.contractYears=o.years; this.player.managerTrust=60; if(!this.player.clubHistory.includes(o.club)) this.player.clubHistory.push(o.club);
           this.renderMatch([`Transfer accepted: joined ${o.club} (${o.league}).`], null);
           this.market.offers=[]; this.switchScreen('gameScreen'); this.render(); this.save();
         });
@@ -934,11 +1117,11 @@ function buildRealBallonDorCandidates(player) {
           <h4>Latest Season Awards</h4>
           ${last ? `<p>${last.season} • League Pos: ${last.leaguePosition} • Europe: ${last.europe}</p>
             <p>Trophies: ${last.trophiesWon.join(', ') || 'None'}</p>
-            <p>UCL Top Scorer: ${last.uclTopScorer} | UEL: ${last.uelTopScorer} | UECL: ${last.ueclTopScorer}</p>
+            <p>UCL Winner: ${last.uclWinner} | UEL Winner: ${last.uelWinner} | UECL Winner: ${last.ueclWinner} | Super Cup: ${last.superCupWinner}</p><p>UCL Top Scorer: ${last.uclTopScorer} | UEL: ${last.uelTopScorer} | UECL: ${last.ueclTopScorer}</p><p>Golden Gloves — UCL: ${last.uclGoldenGlove} | UEL: ${last.uelGoldenGlove} | UECL: ${last.ueclGoldenGlove}</p>
             <p>European Golden Boot Index: ${last.europeanGoldenBoot}</p>
             <p>Ballon d'Or Top 10:</p>
             <ol>${last.ballonTop10.map(p=>`<li>${p.name} (${p.score})</li>`).join('')}</ol>` : '<p>No completed seasons yet.</p>'}
-          <h4>Hall of Fame (Retired)</h4>
+          <h4>All-Time Records</h4><p>European Golden Boot Record: ${this.season.records.europeanGoldenBoot ? `${this.season.records.europeanGoldenBoot.name} (${this.season.records.europeanGoldenBoot.goals})` : 'N/A'}</p><p>Most Trophies: ${this.season.records.mostTrophies ? `${this.season.records.mostTrophies.name} (${this.season.records.mostTrophies.trophies})` : 'N/A'}</p><h4>Hall of Fame (Retired)</h4>
           <p>${(this.season.records.hallOfFame||[]).length ? this.season.records.hallOfFame.map(h=>`${h.name} (${h.legacy})`).join(', ') : 'No retired legends recorded yet.'}</p>
         `;
         document.getElementById('seasonSummary').textContent = this.lastSeasonSummary || 'Use Simulate Full Season for FC-style fast progression.';
@@ -962,7 +1145,8 @@ function buildRealBallonDorCandidates(player) {
           },
           offers:this.market.offers,
           transferRequest:this.transferRequest,
-          lastSeasonSummary:this.lastSeasonSummary
+          lastSeasonSummary:this.lastSeasonSummary,
+          mailbox:this.mailbox
         };
         localStorage.setItem(SAVE_KEY, JSON.stringify(data));
         document.getElementById('autosaveStatus').textContent = `Auto-saved ${new Date().toLocaleTimeString()}`;
@@ -979,6 +1163,7 @@ function buildRealBallonDorCandidates(player) {
           this.market.offers = data.offers || [];
           this.transferRequest = data.transferRequest || null;
           this.lastSeasonSummary = data.lastSeasonSummary || null;
+          this.mailbox = data.mailbox || [];
           this.switchScreen('gameScreen');
           this.render();
         } catch(e) { console.error(e); }
